@@ -30,7 +30,7 @@ dependencies:
   image_picker: ^0.8.0
   mime: ^1.0.0
   logger: ^1.0.0
-  qr_code_scanner: ^0.6.1
+  qr_code_scanner: ^1.0.0
   device_info: ^2.0.0
   geolocator: ^7.0.3
   material_design_icons_flutter: ^5.0.5955-rc.1
@@ -41,6 +41,8 @@ dependencies:
   form_builder_validators: ^7.2.0
   universal_platform: ^1.0.0+1
   preload_page_view: ^0.1.6
+  wifi_iot: ^0.3.16
+  http: ^0.13.5
 
 dev_dependencies:
   flutter_test:

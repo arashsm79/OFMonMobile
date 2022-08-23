@@ -257,6 +257,8 @@ class TbContext {
 
   Future<void> onUserLoaded() async {
     try {
+      navigateTo('/wrappedmain', replace: true, clearStack: true, transition: TransitionType.fadeIn, transitionDuration: Duration(milliseconds: 750));
+      return
       log.debug('onUserLoaded: isAuthenticated=${tbClient.isAuthenticated()}');
       isUserLoaded = true;
       if (tbClient.isAuthenticated()) {
@@ -288,7 +290,7 @@ class TbContext {
         if (res == true) {
           onUserLoaded();
         } else {
-          navigateTo('/login', replace: true, clearStack: true, transition: TransitionType.fadeIn, transitionDuration: Duration(milliseconds: 750));
+          navigateTo('/wrappedmain', replace: true, clearStack: true, transition: TransitionType.fadeIn, transitionDuration: Duration(milliseconds: 750));
         }
       }
     }

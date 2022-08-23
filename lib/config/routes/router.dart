@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'package:thingsboard_app/core/auth/auth_routes.dart';
 import 'package:thingsboard_app/core/context/tb_context.dart';
 import 'package:thingsboard_app/core/init/init_routes.dart';
+import 'package:thingsboard_app/core/sem/sem_routes.dart';
 import 'package:thingsboard_app/modules/alarm/alarm_routes.dart';
 import 'package:thingsboard_app/modules/asset/asset_routes.dart';
 import 'package:thingsboard_app/modules/audit_log/audit_logs_routes.dart';
@@ -33,6 +34,7 @@ class ThingsboardAppRouter {
     });
     InitRoutes(_tbContext).registerRoutes();
     AuthRoutes(_tbContext).registerRoutes();
+    SemRoutes(_tbContext).registerRoutes();
     UiUtilsRoutes(_tbContext).registerRoutes();
     HomeRoutes(_tbContext).registerRoutes();
     ProfileRoutes(_tbContext).registerRoutes();
