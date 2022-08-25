@@ -1,15 +1,8 @@
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/widgets.dart';
 import 'package:thingsboard_app/core/auth/login/login_page.dart';
 import 'package:thingsboard_app/core/context/tb_context.dart';
 import 'package:thingsboard_app/core/context/tb_context_widget.dart';
 import 'package:thingsboard_app/core/sem/sem_page.dart';
-import 'package:thingsboard_app/modules/alarm/alarms_page.dart';
-import 'package:thingsboard_app/modules/device/devices_main_page.dart';
-import 'package:thingsboard_app/modules/home/home_page.dart';
-import 'package:thingsboard_app/modules/more/more_page.dart';
-import 'package:thingsboard_client/thingsboard_client.dart';
 
 class WrappedTbMainNavigationItem {
   final Widget page;
@@ -70,8 +63,9 @@ class _WrappedMainPageState extends TbPageState<WrappedMainPage>
 
   @override
   void dispose() {
-    _tabController.animation!.removeListener(_onTabAnimation);
     super.dispose();
+    return;
+    _tabController.animation!.removeListener(_onTabAnimation);
   }
 
   _onTabAnimation() {

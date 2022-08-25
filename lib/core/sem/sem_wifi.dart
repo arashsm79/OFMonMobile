@@ -5,7 +5,7 @@ import 'package:wifi_iot/wifi_iot.dart';
 import 'dart:io' show Platform;
 
 const String STA_DEFAULT_SSID = "STA_SSID";
-const String STA_DEFAULT_PASSWORD = "STA_PASSWORD";
+const String STA_DEFAULT_PASSWORD = "ferdowsi";
 const NetworkSecurity STA_DEFAULT_SECURITY = NetworkSecurity.WPA;
 
 class FlutterWifiIoT extends StatefulWidget {
@@ -14,7 +14,6 @@ class FlutterWifiIoT extends StatefulWidget {
 }
 
 class _FlutterWifiIoTState extends State<FlutterWifiIoT> {
-
   List<WifiNetwork?>? _htResultNetwork;
   Map<String, bool>? _htIsNetworkRegistered = Map();
 
@@ -144,7 +143,7 @@ class _FlutterWifiIoTState extends State<FlutterWifiIoT> {
                 onSelected: (PopupCommand poCommand) {
                   switch (poCommand.command) {
                     case "Connect":
-                      WiFiForIoTPlugin.connect(STA_DEFAULT_SSID,
+                      WiFiForIoTPlugin.connect(oNetwork.ssid!,
                           password: STA_DEFAULT_PASSWORD,
                           joinOnce: true,
                           security: STA_DEFAULT_SECURITY);
@@ -163,9 +162,13 @@ class _FlutterWifiIoTState extends State<FlutterWifiIoT> {
         });
       });
 
-      return ListView(
-        padding: kMaterialListPadding,
-        children: htNetworks,
+      return Container(
+        height: 200,
+        child: ListView(
+          shrinkWrap: true,
+          padding: kMaterialListPadding,
+          children: htNetworks,
+        ),
       );
     } else {
       return SingleChildScrollView(
