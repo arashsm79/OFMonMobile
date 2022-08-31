@@ -257,28 +257,30 @@ class TbContext {
 
   Future<void> onUserLoaded() async {
     try {
-      navigateTo('/wrappedmain', replace: true, clearStack: true, transition: TransitionType.fadeIn, transitionDuration: Duration(milliseconds: 750));
-      return
       log.debug('onUserLoaded: isAuthenticated=${tbClient.isAuthenticated()}');
       isUserLoaded = true;
       if (tbClient.isAuthenticated()) {
         log.debug('authUser: ${tbClient.getAuthUser()}');
         if (tbClient.getAuthUser()!.userId != null) {
           try {
-            userDetails = await tbClient.getUserService().getUser();
-            homeDashboard = await tbClient.getDashboardService().getHomeDashboardInfo();
+            userDetails = await tbClient.getUserService().getUser().timeout(const Duration(seconds: 5));
+            homeDashboard = await tbClient.getDashboardService().getHomeDashboardInfo().timeout(const Duration(seconds: 5));
           } catch (e) {
-            if (!_isConnectionError(e)) {
-              tbClient.logout();
-            } else {
-              rethrow;
-            }
+            await tbClient.logout();
           }
         }
       } else {
         userDetails = null;
         homeDashboard = null;
-        oauth2ClientInfos = await tbClient.getOAuth2Service().getOAuth2Clients(pkgName: packageName, platform: _oauth2PlatformType);
+        try {
+          oauth2ClientInfos = await tbClient.getOAuth2Service().getOAuth2Clients(pkgName: packageName, platform: _oauth2PlatformType).timeout(const Duration(seconds: 5));
+        } finally {
+          navigateTo('/wrappedmain',
+              replace: true,
+              clearStack: true,
+              transition: TransitionType.fadeIn,
+              transitionDuration: Duration(milliseconds: 750));
+        }
       }
       _isAuthenticated.value = tbClient.isAuthenticated();
       await updateRouteState();
@@ -327,7 +329,8 @@ class TbContext {
           navigateTo('/home', replace: true, transition: TransitionType.fadeIn, transitionDuration: Duration(milliseconds: 750));
         }
       } else {
-        navigateTo('/login', replace: true, clearStack: true, transition: TransitionType.fadeIn, transitionDuration: Duration(milliseconds: 750));
+        navigateTo('/wrappedmain', replace: true, clearStack: true, transition: TransitionType.fadeIn, transitionDuration: Duration(milliseconds: 750));
+        // navigateTo('/login', replace: true, clearStack: true, transition: TransitionType.fadeIn, transitionDuration: Duration(milliseconds: 750));
       }
     }
   }

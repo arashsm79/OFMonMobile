@@ -1,3 +1,4 @@
+import 'package:thingsboard_app/core/sem/sem_utils.dart';
 import 'package:universal_platform/universal_platform.dart';
 
 import 'package:flutter/foundation.dart';
@@ -23,6 +24,7 @@ void main() async {
     await AndroidInAppWebViewController.setWebContentsDebuggingEnabled(true);
   }
 
+  await SemUtils.setSettingValuesFromStorage();
   runApp(ThingsboardApp());
 }
 

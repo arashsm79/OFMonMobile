@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/widgets.dart';
 import 'package:thingsboard_app/core/context/tb_context.dart';
 import 'package:thingsboard_app/core/context/tb_context_widget.dart';
+import 'package:thingsboard_app/core/sem/sem_page.dart';
 import 'package:thingsboard_app/modules/alarm/alarms_page.dart';
 import 'package:thingsboard_app/modules/device/devices_main_page.dart';
 import 'package:thingsboard_app/modules/home/home_page.dart';
@@ -77,6 +78,12 @@ class TbMainNavigationItem {
           title: 'More',
           icon: Icon(Icons.menu),
           path: '/more'
+      ));
+      items.add(TbMainNavigationItem(
+          page: SemPage(tbContext),
+          title: 'Collect',
+          icon: Icon(Icons.dataset),
+          path: '/sem'
       ));
       return items;
     } else {

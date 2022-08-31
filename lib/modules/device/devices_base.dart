@@ -1,6 +1,7 @@
 import 'dart:core';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:intl/intl.dart';
@@ -8,6 +9,7 @@ import 'package:thingsboard_app/constants/assets_path.dart';
 import 'package:thingsboard_app/core/context/tb_context.dart';
 import 'package:thingsboard_app/core/context/tb_context_widget.dart';
 import 'package:thingsboard_app/core/entity/entities_base.dart';
+import 'package:thingsboard_app/core/sem/sem_page.dart';
 import 'package:thingsboard_app/utils/services/device_profile_cache.dart';
 import 'package:thingsboard_app/utils/services/entity_query_api.dart';
 import 'package:thingsboard_app/utils/utils.dart';
@@ -252,6 +254,30 @@ class _DeviceCardState extends TbContextState<DeviceCard> {
                                             )
                                           ]
                                       )
+                                  ),
+                                  PopupMenuButton<String>(
+                                    padding: EdgeInsets.zero,
+                                    onSelected: (String command) {
+                                      switch (command) {
+                                        case "token":
+                                          tbClient.getDeviceService().getDeviceCredentialsByDeviceId(widget.device.entityId.id!).then((cred) {
+                                              if(cred?.credentialsType == DeviceCredentialsType.ACCESS_TOKEN) {
+                                                  Clipboard.setData(ClipboardData(text: cred?.credentialsId));
+                                                  showSuccessNotification("Copied Token: ${cred?.credentialsId}");
+                                                }
+                                            });
+                                          break;
+                                        default:
+                                          break;
+                                      }
+                                    },
+                                    itemBuilder: (BuildContext context) {
+                                      return [
+                                        PopupMenuItem(
+                                            value: 'token',
+                                            child: Text('Copy Token'))
+                                      ];
+                                    },
                                   ),
                                   SizedBox(width: 16),
                                   if (hasDashboard) Icon(Icons.chevron_right, color: Color(0xFFACACAC)),

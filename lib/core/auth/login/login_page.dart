@@ -7,15 +7,17 @@ import 'package:flutter_form_builder/flutter_form_builder.dart';
 import 'package:form_builder_validators/form_builder_validators.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:material_design_icons_flutter/material_design_icons_flutter.dart';
+import 'package:thingsboard_app/constants/app_constants.dart';
 import 'package:thingsboard_app/constants/assets_path.dart';
 import 'package:thingsboard_app/core/context/tb_context.dart';
 import 'package:thingsboard_app/core/context/tb_context_widget.dart';
+import 'package:thingsboard_app/core/entity/entities_base.dart';
 import 'package:thingsboard_app/widgets/tb_progress_indicator.dart';
 import 'package:thingsboard_client/thingsboard_client.dart';
 
 import 'login_page_background.dart';
 
-class LoginPage extends TbPageWidget {
+class LoginPage extends TbContextWidget {
 
   LoginPage(TbContext tbContext) : super(tbContext);
 
@@ -24,7 +26,7 @@ class LoginPage extends TbPageWidget {
 
 }
 
-class _LoginPageState extends TbPageState<LoginPage> {
+class _LoginPageState extends TbContextState<LoginPage> with AutomaticKeepAliveClientMixin<LoginPage> {
 
   final ButtonStyle _oauth2ButtonWithTextStyle =
         OutlinedButton.styleFrom(padding: EdgeInsets.all(16),
@@ -39,6 +41,13 @@ class _LoginPageState extends TbPageState<LoginPage> {
 
   final _loginFormKey = GlobalKey<FormBuilderState>();
 
+  final PageLinkController _pageLinkController = PageLinkController();
+
+  @override
+  bool get wantKeepAlive {
+    return true;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -46,6 +55,7 @@ class _LoginPageState extends TbPageState<LoginPage> {
 
   @override
   void dispose() {
+    _pageLinkController.dispose();
     super.dispose();
   }
 
@@ -305,6 +315,7 @@ class _LoginPageState extends TbPageState<LoginPage> {
   }
 
   void _login() async {
+    log.info(ThingsboardAppConstants.thingsBoardApiEndpoint);
     FocusScope.of(context).unfocus();
     if (_loginFormKey.currentState?.saveAndValidate() ?? false) {
       var formValue = _loginFormKey.currentState!.value;
