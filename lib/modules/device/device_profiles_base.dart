@@ -1,13 +1,20 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math' as Math;
+import 'package:path/path.dart' as Path;
 
 import 'package:auto_size_text/auto_size_text.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:thingsboard_app/constants/app_constants.dart';
 import 'package:thingsboard_app/constants/assets_path.dart';
 import 'package:thingsboard_app/core/context/tb_context.dart';
 import 'package:thingsboard_app/core/context/tb_context_widget.dart';
 import 'package:thingsboard_app/core/entity/entities_base.dart';
+import 'package:thingsboard_app/core/sem/sem_db.dart';
 import 'package:thingsboard_app/utils/services/device_profile_cache.dart';
 import 'package:thingsboard_app/utils/services/entity_query_api.dart';
 import 'package:thingsboard_app/utils/utils.dart';
@@ -273,6 +280,83 @@ class _DeviceProfileCardState extends TbContextState<DeviceProfileCard> {
     inactiveDevicesCount = EntityQueryApi.countDevices(tbClient, deviceType: widget.deviceProfile.name, active: false);
   }
 
+  _checkOTAUpdate() async {
+    try {
+      if (widget.deviceProfile.id.id == null) {
+        return;
+      }
+      var deviceprofile = await tbClient
+          .getDeviceProfileService()
+          .getDeviceProfile(widget.deviceProfile.id.id!);
+
+      var otaPackageId = deviceprofile?.firmwareId?.id;
+      if (otaPackageId == null) {
+        log.info("package id null");
+        return;
+      }
+
+      var otaPackage =
+          await tbClient.getOtaPackageService().getOtaPackageInfo(otaPackageId);
+      if (otaPackage == null) {
+        return;
+      }
+
+      var versionStr = otaPackage.version;
+      var versionComp = versionStr.split(".");
+      var version = int.parse(versionComp[2]) +
+          int.parse(versionComp[1]) * (Math.pow(10, versionComp[2].length)) +
+          int.parse(versionComp[0]) *
+              (Math.pow(10, versionComp[2].length + versionComp[1].length));
+
+      log.info("list $versionComp");
+      log.info("version $version");
+      var db = await SemDb.getDb();
+      var ota_list = await db
+          .rawQuery('SELECT * FROM ota WHERE tb_id = ?', [otaPackageId]);
+      log.info("ota list $ota_list");
+
+      int id;
+      if (ota_list.length != 0) {
+        if ((ota_list[0]['version'] != null) && ota_list[0]['version'] as int >= version) {
+          log.info("OLD ota");
+          showInfoNotification("No OTA package newer that $version available.");
+          return;
+        }
+        id = ota_list[0]['id'] as int;
+      } else {
+        id = await db.insert("ota", {
+          "tb_id": otaPackageId,
+          "profile_tb_id": otaPackage.deviceProfileId.id
+        });
+      }
+
+
+      showInfoNotification("Found new OTA package with version $version");
+      var otaResponse = await tbClient
+          .getOtaPackageService()
+          .downloadOtaPackage(otaPackageId);
+      var path = (await getApplicationDocumentsDirectory()).path;
+      var file =
+          File(Path.join(path, 'ota', '${otaPackage.deviceProfileId.id}'));
+      if (await file.exists()) {
+        log.info("file exists");
+        await file.delete();
+      }
+      var fileStream = (await File(
+                  Path.join(path, 'ota', '${otaPackage.deviceProfileId.id}'))
+              .create(recursive: true))
+          .openWrite();
+      await otaResponse?.stream.cast<List<int>>().pipe(fileStream);
+      await db.update("ota", {"version": version, "path": file.path}, where: "id = ?", whereArgs: [id]);
+      var lis = await db.rawQuery("SELECT * FROM ota");
+      log.info(lis);
+      showSuccessNotification(
+          "OTA package with version $version saved to local storage.");
+    } catch (e) {
+      showErrorNotification("Failed to download OTA package.");
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     var entity = widget.deviceProfile;
@@ -381,7 +465,57 @@ class _DeviceProfileCardState extends TbContextState<DeviceProfileCard> {
                     onTap: () {
                       navigateTo('/deviceList?active=false&deviceType=${entity.name}');
                     }
-                )
+                ),
+                Divider(height: 1),
+                GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    child: FutureBuilder<int>(
+                      future: inactiveDevicesCount,
+                      builder: (context, snapshot) {
+                        if (snapshot.hasData && snapshot.connectionState == ConnectionState.done) {
+                          var deviceCount = snapshot.data!;
+                          return Padding(
+                            padding: EdgeInsets.all(12),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.max,
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Row(
+                                  children: [
+                                    Stack(
+                                      children: [
+                                        Icon(Icons.update, size: 16),
+                                      ],
+                                    ),
+                                    SizedBox(width: 8.67),
+                                    Text('Check for Update',
+                                        style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w500,
+                                            height: 16 / 12)),
+                                    SizedBox(width: 8.67),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          );
+                        } else {
+                          return Container(height: 40,
+                              child: Center(
+                                  child: Container(
+                                      height: 20, width: 20,
+                                      child:
+                                      CircularProgressIndicator(
+                                          valueColor: AlwaysStoppedAnimation(Theme.of(tbContext.currentState!.context).colorScheme.primary),
+                                          strokeWidth: 2.5))));
+                        }
+                      },
+                    ),
+                    onTap: () {
+                      _checkOTAUpdate();
+                    }
+                ),
               ]
           )
       );

@@ -6,12 +6,11 @@ import 'package:flutter_form_builder/flutter_form_builder.dart';
 import 'package:form_builder_validators/form_builder_validators.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/http.dart';
-import 'package:path/path.dart' as Path;
-import 'package:sqflite/sqflite.dart';
 import 'package:thingsboard_app/constants/app_constants.dart';
 import 'package:thingsboard_app/core/context/tb_context.dart';
 import 'package:thingsboard_app/core/context/tb_context_widget.dart';
 import 'package:thingsboard_app/core/entity/entities_base.dart';
+import 'package:thingsboard_app/core/sem/sem_db.dart';
 import 'package:thingsboard_app/core/sem/sem_utils.dart';
 import 'package:thingsboard_app/core/sem/sem_wifi.dart';
 
@@ -67,40 +66,6 @@ class _SemPageState extends TbContextState<SemPage>
     super.initState();
   }
 
-  Future<Database> initDb() async {
-    // Get a location using getDatabasesPath
-    var databasesPath = await getDatabasesPath();
-    String path = Path.join(databasesPath, 'sem.db');
-    log.info(path);
-    // open the database
-    Database database = await openDatabase(path, version: 1,
-        onCreate: (Database db, int version) async {
-      log.info("Creating sem database.");
-      await db.execute('''
-        CREATE TABLE devices (
-          id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-          access_token TEXT NOT NULL
-        );
-      ''');
-      await db.execute('''
-        CREATE TABLE telemetry (
-          id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-          ct_id INTEGER NOT NULL,
-          real_power REAL,
-          apparent_power REAL,
-          power_factor REAL,
-          i_rms REAL,
-          v_rms REAL,
-          kwh REAL,
-          "timestamp" INTEGER,
-          device_id INTEGER NOT NULL,
-          CONSTRAINT telemetry_FK FOREIGN KEY (device_id) REFERENCES devices(id)
-        );
-      ''');
-    });
-    return database;
-  }
-
   Future<Map<String, dynamic>?> getTimeOnline() async {
     try {
       var res = await http.get(Uri.parse(
@@ -134,9 +99,13 @@ class _SemPageState extends TbContextState<SemPage>
         if (res.statusCode == 200) {
           _accessTokenFormKey.currentState?.reset();
         }
+      } catch (e) {
+        throw e;
       } finally {
         await forceWifiUsage(false);
       }
+    } else {
+      throw Error();
     }
   }
 
@@ -156,6 +125,8 @@ class _SemPageState extends TbContextState<SemPage>
           .post(Uri.parse(ThingsboardAppConstants.deviceEndpoint + '/time'),
               body: timebuf.buffer.asUint8List())
           .timeout(Duration(seconds: 2));
+    } catch (e) {
+      throw e;
     } finally {
       await forceWifiUsage(false);
     }
@@ -172,6 +143,8 @@ class _SemPageState extends TbContextState<SemPage>
                 ThingsboardAppConstants.deviceEndpoint + '/powerloss_log'),
           )
           .timeout(Duration(seconds: 2));
+    } catch (e) {
+      throw e;
     } finally {
       await forceWifiUsage(false);
     }
@@ -202,7 +175,9 @@ class _SemPageState extends TbContextState<SemPage>
           .get(
             Uri.parse(ThingsboardAppConstants.deviceEndpoint + '/token'),
           )
-          .timeout(Duration(seconds: 30));
+          .timeout(Duration(seconds: 2));
+    } catch (e) {
+      throw e;
     } finally {
       await forceWifiUsage(false);
     }
@@ -223,187 +198,192 @@ class _SemPageState extends TbContextState<SemPage>
   }
 
   Future<void> _collect() async {
-    initDb().then((db) async {
-      log.info("Collecting...");
+    var db = await SemDb.getDb();
+    log.info("Collecting...");
 
-      // First get the access token
-      log.info("Getting token.");
-      var token = await _getToken();
+    // First get the access token
+    log.info("Getting token.");
+    var token = await _getToken();
 
-      Response response;
-      log.info("Getting telemetry.");
-      try {
-        await forceWifiUsage(true);
-        // get the telemtry data
-        response = await http
-            .get(
-              Uri.parse(ThingsboardAppConstants.deviceEndpoint + '/telemetry'),
-            )
-            .timeout(Duration(seconds: 60));
-      } finally {
-        await forceWifiUsage(false);
-      }
-      // check whether a device with this access token eixsts
-      var list = await db
-          .rawQuery('SELECT * FROM devices WHERE access_token = ?', [token]);
-      log.info(list);
+    Response response;
+    log.info("Getting telemetry.");
+    try {
+      await forceWifiUsage(true);
+      // get the telemtry data
+      response = await http
+          .get(
+            Uri.parse(ThingsboardAppConstants.deviceEndpoint + '/telemetry'),
+          )
+          .timeout(Duration(seconds: 60));
+    } catch (e) {
+      throw e;
+    } finally {
+      await forceWifiUsage(false);
+    }
+    // check whether a device with this access token eixsts
+    var list = await db
+        .rawQuery('SELECT * FROM devices WHERE access_token = ?', [token]);
+    log.info(list);
 
-      // if this is a new token, add it to device list otherwise return
-      // the id of the existing device.
-      int recordId = (list.length == 0)
-          ? await db.insert('devices', {'access_token': token})
-          : list[0]['id'] as int;
-      log.info(recordId);
-      var bodyLength = response.bodyBytes.buffer.lengthInBytes;
-      log.info("Got response with length $bodyLength");
-      var bdata = response.bodyBytes.buffer.asByteData();
+    // if this is a new token, add it to device list otherwise return
+    // the id of the existing device.
+    int recordId = (list.length == 0)
+        ? await db.insert('devices', {'access_token': token})
+        : list[0]['id'] as int;
+    log.info(recordId);
+    var bodyLength = response.bodyBytes.buffer.lengthInBytes;
+    log.info("Got response with length $bodyLength");
+    var bdata = response.bodyBytes.buffer.asByteData();
 
-      // send current time to sensor
-      log.info("Send time");
-      var currentTime = await _sendTime();
+    // send current time to sensor
+    log.info("Send time");
+    var currentTime = await _sendTime();
 
-      // get powerloss timestamps
-      log.info("Get powerloss");
-      var powerlossTimestamps = await _getPowerlossLog();
-      log.info("powerloss ts $powerlossTimestamps");
-      powerlossTimestamps.sort();
+    // get powerloss timestamps
+    log.info("Get powerloss");
+    var powerlossTimestamps = await _getPowerlossLog();
+    log.info("powerloss ts $powerlossTimestamps");
+    powerlossTimestamps.sort();
 
-      // convert the binary data into a struct and them one by one to the database.
-      List<CTReading> responseList = [];
-      var offset = 0;
-      for (int i = 0; i < bodyLength / _ctReadingSize; i++) {
-        var id = bdata.getUint16(offset + 0, Endian.little);
-        var realPower = bdata.getFloat32(offset + 2, Endian.little);
-        var apparentPower = bdata.getFloat32(offset + 6, Endian.little);
-        var iRms = bdata.getFloat32(offset + 10, Endian.little);
-        var vRms = bdata.getFloat32(offset + 14, Endian.little);
-        var kwh = bdata.getFloat32(offset + 18, Endian.little);
-        var timestamp = bdata.getUint64(offset + 22, Endian.little);
-        var ctReading =
-            CTReading(id, realPower, apparentPower, iRms, vRms, kwh, timestamp);
-        offset += _ctReadingSize;
-        responseList.add(ctReading);
-      }
+    // convert the binary data into a struct and them one by one to the database.
+    List<CTReading> responseList = [];
+    var offset = 0;
+    for (int i = 0; i < bodyLength / _ctReadingSize; i++) {
+      var id = bdata.getUint16(offset + 0, Endian.little);
+      var realPower = bdata.getFloat32(offset + 2, Endian.little);
+      var apparentPower = bdata.getFloat32(offset + 6, Endian.little);
+      var iRms = bdata.getFloat32(offset + 10, Endian.little);
+      var vRms = bdata.getFloat32(offset + 14, Endian.little);
+      var kwh = bdata.getFloat32(offset + 18, Endian.little);
+      var timestamp = bdata.getUint64(offset + 22, Endian.little);
+      var ctReading =
+          CTReading(id, realPower, apparentPower, iRms, vRms, kwh, timestamp);
+      offset += _ctReadingSize;
+      responseList.add(ctReading);
+    }
 
-      // Calculate the difference between the timestamp of the latest reading and current time
-      // We will distribute the error in between the powerlosses
-      var powerlossTimestampsIndex = 0;
-      if (powerlossTimestamps.isNotEmpty) {
-        var addedDelta = 0;
-        var errorDelta = currentTime - responseList.last.timestamp;
-        var intervalError = errorDelta ~/ powerlossTimestamps.length;
-        log.info(
-            "curtime: $currentTime, last response time: ${responseList.last.timestamp}");
-        bool done = false;
-        log.info("errorDelta: $errorDelta, intervalError: $intervalError");
-        if (errorDelta > 0) {
-          for (var i = 0; i < responseList.length; i++) {
-            if (!done &&
-                (responseList[i].timestamp >
-                    powerlossTimestamps[powerlossTimestampsIndex])) {
-              addedDelta += intervalError;
-              log.info("added error interval");
-              powerlossTimestampsIndex += 1;
-              if (powerlossTimestampsIndex == powerlossTimestamps.length) {
-                done = true;
-              }
+    // Calculate the difference between the timestamp of the latest reading and current time
+    // We will distribute the error in between the powerlosses
+    var powerlossTimestampsIndex = 0;
+    if (powerlossTimestamps.isNotEmpty) {
+      var addedDelta = 0;
+      var errorDelta = currentTime - responseList.last.timestamp;
+      var intervalError = errorDelta ~/ powerlossTimestamps.length;
+      log.info(
+          "curtime: $currentTime, last response time: ${responseList.last.timestamp}");
+      bool done = false;
+      log.info("errorDelta: $errorDelta, intervalError: $intervalError");
+      if (errorDelta > 0) {
+        for (var i = 0; i < responseList.length; i++) {
+          if (!done &&
+              (responseList[i].timestamp >
+                  powerlossTimestamps[powerlossTimestampsIndex])) {
+            addedDelta += intervalError;
+            log.info("added error interval");
+            powerlossTimestampsIndex += 1;
+            if (powerlossTimestampsIndex == powerlossTimestamps.length) {
+              done = true;
             }
-            responseList[i].timestamp += addedDelta;
           }
+          responseList[i].timestamp += addedDelta;
         }
       }
+    }
 
-      log.info(responseList);
-      for (var ctr in responseList) {
-        await db.insert('telemetry', {
-          'ct_id': ctr.ctId,
-          'real_power': ctr.realPower,
-          'apparent_power': ctr.apparentPower,
-          'power_factor': ctr.realPower / ctr.apparentPower,
-          'i_rms': ctr.iRms,
-          'v_rms': ctr.vRms,
-          'kwh': ctr.kwh,
-          'timestamp': ctr.timestamp,
-          'device_id': recordId
-        });
-        log.info("inserted a record");
-      }
-      await _resetDevice();
-    });
+    log.info(responseList);
+    for (var ctr in responseList) {
+      await db.insert('telemetry', {
+        'ct_id': ctr.ctId,
+        'real_power': ctr.realPower,
+        'apparent_power': ctr.apparentPower,
+        'power_factor': ctr.realPower / ctr.apparentPower,
+        'i_rms': ctr.iRms,
+        'v_rms': ctr.vRms,
+        'kwh': ctr.kwh,
+        'timestamp': ctr.timestamp,
+        'device_id': recordId
+      });
+      log.info("inserted a record");
+    }
+    await _resetDevice();
   }
 
   Future<void> _resetDevice() async {
     await forceWifiUsage(true);
     log.info("Resseting Device");
-    var res = await http
-        .get(
-          Uri.parse(ThingsboardAppConstants.deviceEndpoint + '/reset'),
-        )
-        .timeout(Duration(seconds: 10));
-    if (res.statusCode == 200) {
-      log.info("Successfully reset device.");
-    } else {
-      log.info("Failed to reset device.");
+    try {
+      var res = await http
+          .get(
+            Uri.parse(ThingsboardAppConstants.deviceEndpoint + '/reset'),
+          )
+          .timeout(Duration(seconds: 10));
+      if (res.statusCode == 200) {
+        log.info("Successfully reset device.");
+      } else {
+        log.info("Failed to reset device.");
+      }
+    } catch (e) {
+      throw e;
+    } finally {
+      await forceWifiUsage(false);
     }
-    await forceWifiUsage(false);
   }
 
   Future<void> _syncWithServer() async {
-    initDb().then((db) async {
-      // get a list of all devices
-      var deviceList = await db.rawQuery('SELECT * FROM devices');
+    var db = await SemDb.getDb();
+    // get a list of all devices
+    var deviceList = await db.rawQuery('SELECT * FROM devices');
 
-      log.info(deviceList);
-      for (var device in deviceList) {
-        String accessToken = device['access_token']! as String;
-        var telemetryList = await db.rawQuery(
-            'SELECT * FROM telemetry WHERE device_id = ?', [device['id']]);
+    log.info(deviceList);
+    for (var device in deviceList) {
+      String accessToken = device['access_token']! as String;
+      var telemetryList = await db.rawQuery(
+          'SELECT * FROM telemetry WHERE device_id = ?', [device['id']]);
 
-        log.info(accessToken);
-        log.info(telemetryList);
+      log.info(accessToken);
+      log.info(telemetryList);
 
-        // there are no telemetry data associated with this, device.
-        // delete it
-        if (telemetryList.length == 0) {
-          await db.rawQuery('DELETE FROM devices WHERE id = ?', [device['id']]);
-          continue;
-        }
-
-        List<Map<String, dynamic>> jsonList = [];
-        for (var telemetry in telemetryList) {
-          jsonList.add({
-            'ts': telemetry['timestamp'],
-            'values': {
-              'ct_id': telemetry['ct_id'],
-              'real_power': telemetry['real_power'],
-              'apparent_power': telemetry['apparent_power'],
-              'i_rms': telemetry['i_rms'],
-              'v_rms': telemetry['v_rms'],
-              'kwh': telemetry['kwh'],
-              'power_factor': telemetry['power_factor'],
-            }
-          });
-        }
-
-        print(jsonEncode(jsonList));
-        // Send telemetry data to server
-        await forceWifiUsage(true);
-        var telemetryResponse = await http
-            .post(
-                Uri.parse(ThingsboardAppConstants.thingsBoardApiEndpoint +
-                    '/api/v1/' +
-                    accessToken +
-                    '/telemetry'),
-                body: jsonEncode(jsonList))
-            .timeout(Duration(seconds: 2));
-        await forceWifiUsage(false);
-
-        if (telemetryResponse.statusCode == 200) {
-          // log.info("Successfully synced telemetry data.");
-          // await db.rawQuery('DELETE FROM telemetry WHERE device_id = ?', [device['id']]);
-        }
+      // there are no telemetry data associated with this, device.
+      // delete it
+      if (telemetryList.length == 0) {
+        await db.rawQuery('DELETE FROM devices WHERE id = ?', [device['id']]);
+        continue;
       }
-    });
+
+      List<Map<String, dynamic>> jsonList = [];
+      for (var telemetry in telemetryList) {
+        jsonList.add({
+          'ts': telemetry['timestamp'],
+          'values': {
+            'ct_id': telemetry['ct_id'],
+            'real_power': telemetry['real_power'],
+            'apparent_power': telemetry['apparent_power'],
+            'i_rms': telemetry['i_rms'],
+            'v_rms': telemetry['v_rms'],
+            'kwh': telemetry['kwh'],
+            'power_factor': telemetry['power_factor'],
+          }
+        });
+      }
+
+      print(jsonEncode(jsonList));
+      // Send telemetry data to server
+      await forceWifiUsage(true);
+      var telemetryResponse = await http
+          .post(
+              Uri.parse(ThingsboardAppConstants.thingsBoardApiEndpoint +
+                  '/api/v1/' +
+                  accessToken +
+                  '/telemetry'),
+              body: jsonEncode(jsonList))
+          .timeout(Duration(seconds: 2));
+      await forceWifiUsage(false);
+
+      if (telemetryResponse.statusCode == 200) {
+        // log.info("Successfully synced telemetry data.");
+        // await db.rawQuery('DELETE FROM telemetry WHERE device_id = ?', [device['id']]);
+      }
+    }
   }
 
   @override
@@ -449,7 +429,8 @@ class _SemPageState extends TbContextState<SemPage>
                                                     .thingsBoardApiEndpoint,
                                             validator:
                                                 FormBuilderValidators.compose([
-                                              FormBuilderValidators.url(context, requireProtocol: true,
+                                              FormBuilderValidators.url(context,
+                                                  requireProtocol: true,
                                                   errorText:
                                                       'Enter a valid URL'),
                                             ]),
@@ -471,7 +452,8 @@ class _SemPageState extends TbContextState<SemPage>
                                                     .deviceEndpoint,
                                             validator:
                                                 FormBuilderValidators.compose([
-                                              FormBuilderValidators.url(context, requireProtocol: true,
+                                              FormBuilderValidators.url(context,
+                                                  requireProtocol: true,
                                                   errorText:
                                                       'Enter a valid URL'),
                                             ]),
@@ -513,26 +495,28 @@ class _SemPageState extends TbContextState<SemPage>
                               var tbEndpoint =
                                   settingsForm?[SemUtils.kThingsBoardEndpoint];
                               if (tbEndpoint != null) {
-                                ThingsboardAppConstants.storage
-                                    .write(key: SemUtils.kThingsBoardEndpoint, value: tbEndpoint);
+                                ThingsboardAppConstants.storage.write(
+                                    key: SemUtils.kThingsBoardEndpoint,
+                                    value: tbEndpoint);
                               }
 
                               var deviceEndpoint =
                                   settingsForm?[SemUtils.kDeviceEndpoint];
                               if (deviceEndpoint != null) {
-                                ThingsboardAppConstants.storage
-                                    .write(key: SemUtils.kDeviceEndpoint, value: deviceEndpoint);
+                                ThingsboardAppConstants.storage.write(
+                                    key: SemUtils.kDeviceEndpoint,
+                                    value: deviceEndpoint);
                               }
 
                               var deviceApPassword =
                                   settingsForm?[SemUtils.kDeviceApPassword];
                               if (deviceApPassword != null) {
-                                ThingsboardAppConstants.storage
-                                    .write(key: SemUtils.kDeviceApPassword, value: deviceApPassword);
+                                ThingsboardAppConstants.storage.write(
+                                    key: SemUtils.kDeviceApPassword,
+                                    value: deviceApPassword);
                               }
 
                               await SemUtils.setSettingValuesFromStorage();
-
                             }
                             pop(true, context);
                           },
@@ -625,16 +609,13 @@ class _SemPageState extends TbContextState<SemPage>
         _isPending = true;
         await Future.delayed(Duration(seconds: 1));
         await onClick();
-        log.info("asdasdsad");
         if (showSuccess) {
           showSuccessNotification("Operation \"$msg\" finished.");
         }
       } catch (e) {
         showErrorNotification("Operation \"$msg\" failed.");
-        log.info("eerrrrrasd");
         log.info(e);
       } finally {
-        log.info("finalyyyyy");
         _isPending = false;
       }
     }
@@ -644,17 +625,17 @@ class _SemPageState extends TbContextState<SemPage>
     List<ActionItem> items = [];
     items.addAll([
       ActionItem(
-          title: 'Set Access Token',
+          title: 'Send Access Token',
           icon: Icons.lock_open,
           onClick: () {
-            _actionItemOnClickWrapper(_sendToken, 'Set Access Token');
+            _actionItemOnClickWrapper(_sendToken, 'Send Access Token');
           }),
       ActionItem(
           title: 'Get Access Token',
           icon: Icons.token_outlined,
           onClick: () {
             _actionItemOnClickWrapper(() async {
-              _getToken(showOutput: true);
+              await _getToken(showOutput: true);
             }, 'Get Access Token', showSuccess: false);
           }),
       ActionItem(
