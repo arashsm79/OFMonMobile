@@ -295,6 +295,12 @@ class _DeviceProfileCardState extends TbContextState<DeviceProfileCard> {
         return;
       }
 
+      var otaPackageProfileId = deviceprofile?.id?.id;
+      if (otaPackageProfileId == null) {
+        log.info("package profile id null");
+        return;
+      }
+
       var otaPackage =
           await tbClient.getOtaPackageService().getOtaPackageInfo(otaPackageId);
       if (otaPackage == null) {
@@ -311,18 +317,18 @@ class _DeviceProfileCardState extends TbContextState<DeviceProfileCard> {
       log.info("list $versionComp");
       log.info("version $version");
       var db = await SemDb.getDb();
-      var ota_list = await db
-          .rawQuery('SELECT * FROM ota WHERE tb_id = ?', [otaPackageId]);
-      log.info("ota list $ota_list");
+      var otaList = await db
+          .rawQuery('SELECT * FROM ota WHERE profile_tb_id = ?', [otaPackageProfileId]);
+      log.info("ota list $otaList");
 
       int id;
-      if (ota_list.length != 0) {
-        if ((ota_list[0]['version'] != null) && ota_list[0]['version'] as int >= version) {
+      if (otaList.length != 0) {
+        if ((otaList[0]['version'] != null) && otaList[0]['version'] as int >= version) {
           log.info("OLD ota");
           showInfoNotification("No OTA package newer that $version available.");
           return;
         }
-        id = ota_list[0]['id'] as int;
+        id = otaList[0]['id'] as int;
       } else {
         id = await db.insert("ota", {
           "tb_id": otaPackageId,

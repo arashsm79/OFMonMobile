@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -86,12 +87,84 @@ class _SemPageState extends TbContextState<SemPage>
     super.dispose();
   }
 
+  Future<int> _getVersion() async {
+    try {
+      await forceWifiUsage(true).timeout(Duration(seconds: 10));
+      var versionResponse = await http
+          .get(
+            Uri.parse(ThingsboardAppConstants.deviceEndpoint + '/version'),
+          )
+          .timeout(Duration(seconds: 10));
+      log.info("version ${versionResponse.body}");
+      return int.parse(versionResponse.body);
+    } catch (e) {
+      throw e;
+    } finally {
+      await forceWifiUsage(false);
+    }
+  }
+
+  Future<void> _updateDevice() async {
+    // get device version
+    var version = await _getVersion();
+
+    var db = await SemDb.getDb();
+
+    var deviceProfileId = (await _getToken()).substring(20, 56);
+    log.info("device profile id $deviceProfileId");
+
+    var otaList = await db.rawQuery(
+        "SELECT * FROM ota WHERE profile_tb_id = ?", [deviceProfileId]);
+    log.info(otaList);
+
+    if (otaList.length == 0) {
+      showErrorNotification("No OTA package is available for this device.");
+      await Future.delayed(Duration(seconds: 3));
+      throw Error;
+    }
+
+    var otaVersion = otaList[0]['version'] as int;
+    if (otaVersion <= version) {
+      showErrorNotification(
+          "No OTA package with newer version is available for this device.");
+      await Future.delayed(Duration(seconds: 3));
+      throw Error;
+    }
+
+    var otaPackagePath = otaList[0]['path'] as String;
+    var fileData = (File(otaPackagePath).readAsBytesSync());
+
+    log.info("ota length ${fileData.length}");
+
+    try {
+      await forceWifiUsage(true).timeout(Duration(seconds: 10));
+      var otaResponse = await http
+          .post(
+            Uri.parse(ThingsboardAppConstants.deviceEndpoint + '/ota'),
+            headers: {
+              "Content-Type": "application/octet-stream",
+              "X-FIRMWARE-VERSION": "$otaVersion",
+            },
+            body: fileData,
+          )
+          .timeout(Duration(seconds: 290));
+
+      if (otaResponse.statusCode != 200) {
+        throw Error;
+      }
+    } catch (e) {
+      throw e;
+    } finally {
+      await forceWifiUsage(false);
+    }
+  }
+
   Future<void> _sendToken() async {
     if (_accessTokenFormKey.currentState?.saveAndValidate() ?? false) {
       var formValue = _accessTokenFormKey.currentState!.value;
       String token = formValue['access_token'];
       try {
-        await forceWifiUsage(true);
+        await forceWifiUsage(true).timeout(Duration(seconds: 10));
         var res = await http
             .post(Uri.parse(ThingsboardAppConstants.deviceEndpoint + '/token'),
                 body: utf8.encode(token))
@@ -120,7 +193,7 @@ class _SemPageState extends TbContextState<SemPage>
     log.info("sending time: $unixTime");
 
     try {
-      await forceWifiUsage(true);
+      await forceWifiUsage(true).timeout(Duration(seconds: 10));
       await http
           .post(Uri.parse(ThingsboardAppConstants.deviceEndpoint + '/time'),
               body: timebuf.buffer.asUint8List())
@@ -136,7 +209,7 @@ class _SemPageState extends TbContextState<SemPage>
   Future<List<int>> _getPowerlossLog() async {
     Response response;
     try {
-      await forceWifiUsage(true);
+      await forceWifiUsage(true).timeout(Duration(seconds: 10));
       response = await http
           .get(
             Uri.parse(
@@ -170,7 +243,7 @@ class _SemPageState extends TbContextState<SemPage>
   Future<String> _getToken({bool showOutput: false}) async {
     Response tokenResponse;
     try {
-      await forceWifiUsage(true);
+      await forceWifiUsage(true).timeout(Duration(seconds: 10));
       tokenResponse = await http
           .get(
             Uri.parse(ThingsboardAppConstants.deviceEndpoint + '/token'),
@@ -202,13 +275,13 @@ class _SemPageState extends TbContextState<SemPage>
     log.info("Collecting...");
 
     // First get the access token
-    log.info("Getting token.");
-    var token = await _getToken();
+    var accessToken = (await _getToken()).substring(0, 20);
+    log.info("Got access token: $accessToken");
 
     Response response;
     log.info("Getting telemetry.");
     try {
-      await forceWifiUsage(true);
+      await forceWifiUsage(true).timeout(Duration(seconds: 10));
       // get the telemtry data
       response = await http
           .get(
@@ -221,14 +294,14 @@ class _SemPageState extends TbContextState<SemPage>
       await forceWifiUsage(false);
     }
     // check whether a device with this access token eixsts
-    var list = await db
-        .rawQuery('SELECT * FROM devices WHERE access_token = ?', [token]);
+    var list = await db.rawQuery(
+        'SELECT * FROM devices WHERE access_token = ?', [accessToken]);
     log.info(list);
 
     // if this is a new token, add it to device list otherwise return
     // the id of the existing device.
     int recordId = (list.length == 0)
-        ? await db.insert('devices', {'access_token': token})
+        ? await db.insert('devices', {'access_token': accessToken})
         : list[0]['id'] as int;
     log.info(recordId);
     var bodyLength = response.bodyBytes.buffer.lengthInBytes;
@@ -309,7 +382,7 @@ class _SemPageState extends TbContextState<SemPage>
   }
 
   Future<void> _resetDevice() async {
-    await forceWifiUsage(true);
+    await forceWifiUsage(true).timeout(Duration(seconds: 10));
     log.info("Resseting Device");
     try {
       var res = await http
@@ -368,7 +441,7 @@ class _SemPageState extends TbContextState<SemPage>
 
       print(jsonEncode(jsonList));
       // Send telemetry data to server
-      await forceWifiUsage(true);
+      await forceWifiUsage(true).timeout(Duration(seconds: 10));
       var telemetryResponse = await http
           .post(
               Uri.parse(ThingsboardAppConstants.thingsBoardApiEndpoint +
@@ -655,6 +728,12 @@ class _SemPageState extends TbContextState<SemPage>
           icon: Icons.upload_outlined,
           onClick: () {
             _actionItemOnClickWrapper(_syncWithServer, 'Sync with Server');
+          }),
+      ActionItem(
+          title: 'Update Device Firmware',
+          icon: Icons.update,
+          onClick: () {
+            _actionItemOnClickWrapper(_updateDevice, 'Update Device Firmware');
           }),
       ActionItem(
           title: 'Reset Device',

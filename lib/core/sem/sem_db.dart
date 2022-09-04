@@ -25,7 +25,7 @@ class SemDb {
         CREATE TABLE ota (
           id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
           tb_id TEXT UNIQUE,
-          profile_tb_id TEXT,
+          profile_tb_id TEXT UNIQUE,
           version INTEGER,
           path TEXT
         );

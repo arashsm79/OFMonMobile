@@ -130,6 +130,25 @@ class _DeviceCardState extends TbContextState<DeviceCard> {
     }
   }
 
+  _copyDeviceToken() async {
+    var cred = await tbClient
+        .getDeviceService()
+        .getDeviceCredentialsByDeviceId(widget.device.entityId.id!);
+
+    var deviceInfo = await tbClient
+        .getDeviceService()
+        .getDeviceInfo(widget.device.entityId.id!);
+
+    if (deviceInfo == null || cred == null) {
+      return;
+    }
+
+    if (cred.credentialsType == DeviceCredentialsType.ACCESS_TOKEN) {
+      Clipboard.setData(ClipboardData(text: cred.credentialsId + deviceInfo.deviceProfileId!.id!));
+      showSuccessNotification("Copied Token: ${cred.credentialsId + deviceInfo.deviceProfileId!.id!}");
+    }
+  }
+
   Widget buildCard(BuildContext context) {
     return Stack(
         children: [
@@ -260,12 +279,7 @@ class _DeviceCardState extends TbContextState<DeviceCard> {
                                     onSelected: (String command) {
                                       switch (command) {
                                         case "token":
-                                          tbClient.getDeviceService().getDeviceCredentialsByDeviceId(widget.device.entityId.id!).then((cred) {
-                                              if(cred?.credentialsType == DeviceCredentialsType.ACCESS_TOKEN) {
-                                                  Clipboard.setData(ClipboardData(text: cred?.credentialsId));
-                                                  showSuccessNotification("Copied Token: ${cred?.credentialsId}");
-                                                }
-                                            });
+                                          _copyDeviceToken();
                                           break;
                                         default:
                                           break;
