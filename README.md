@@ -1,16 +1,15 @@
-## [ThingsBoard Mobile Application](https://thingsboard.io/products/mobile/) is an open-source project based on [Flutter](https://flutter.dev/)
-Powered by [ThingsBoard](https://thingsboard.io) IoT Platform
+## Fork of [ThingsBoard Mobile Application](https://thingsboard.io/products/mobile/) to be used with [OFMon](https://github.com/arashsm79/OFMon)
 
-Build your own IoT mobile application **with minimum coding efforts**
+There have been numerous smart energy monitoring systems based on the Internet of things (IoT). In most of these systems, the end devices are directly connected to a network and are continuously sending out their data. This poses a real challenge in environments where a reliable wireless connection is not always available, e.g., inside containers, remote locations, or even in places where there is simply no proper infrastructure for wireless communication.
 
-## Resources
+I have developed an offline-first energy monitoring system using ESP32 microcontrollers and their bleeding-edge Rust ecosystem to store data locally in their flash. The readings are collected from the devices by connecting to their access point and are saved on the local storage using a smartphone running a fork of the Thingsboard Flutter Mobile application. After collecting the telemetry data from the devices and when a network connection is available, the mobile app can flush the data of all the devices to the Thingsboards server, an IoT platform used for data collection and visualization. Rust is a type-safe and memory-safe system programming language, it provides its safety guarantees at compile time using rules that eliminate many memory-safety issues. There has been a significant adoption in using Rust for embedded development after companies like STMicrocontrollers and Espressif Systems introduced their community projects for enabling the use of the Rust programming language on their SoCs and modules.
 
-- [Getting started](https://thingsboard.io/docs/mobile/getting-started/) - learn how to set up and run your first IoT mobile app
-- [Customize your app](https://thingsboard.io/docs/mobile/customization/) - learn how to customize the app
-- [Publish your app](https://thingsboard.io/docs/mobile/release/) - learn how to publish app to Google Play or App Store
+A Current transformer is connected to the ADC subsystem of ESP32 microcontroller and is used to calculate the RMS current and voltage and kWh of the power line. These readings are periodically saved to flash storage. The device also creates a Wi-Fi access point using a unique SSID that is a combination of its MAC address and a predefined string. It then spins up a web server to which clients can request telemetry data along with other operations.
 
-## Live demo app
+The filesystem used for flash storage is of utmost importance. We have chosen LittleFS since it is power- loss resilient and has wear leveling mechanisms for flash storage. It also uses constant RAM to work with any kind of data. Some parts of the flash storage have been reserved for Over-the-Air (OTA) updates, but the majority of the flash storage is formatted with the LittleFS file system. The devices are identified using their server-side representation token which is given to them on their first time initialization using the mobile app. The mobile app also maintains a list of the devices it has connected to and fetches their server-side information when a connection is available. This information is shown alongside the devices’ SSID when scanning for access points. After collecting the data from the devices and syncing it with the Thingsboard server, customers with a few devices or operators with tens of devices can view their data both on the mobile app and on the
+Thingsboard web app.
 
-To be familiar with common app features try out our ThingsBoard Live mobile application available on Google Play and App Store
-- [Get it on Google Play](https://play.google.com/store/apps/details?id=org.thingsboard.demo.app&pcampaignid=pcampaignidMKT-Other-global-all-co-prtnr-py-PartBadge-Mar2515-1)
-- [Download on the App Store](https://apps.apple.com/us/app/thingsboard-live/id1594355695?itsct=apps_box_badge&amp;itscg=30200)
+![image](https://user-images.githubusercontent.com/57039957/213930124-dffb86d8-de19-46cb-a774-2703518b55a3.png)
+![image](https://user-images.githubusercontent.com/57039957/213930133-bd489857-3335-40f6-89e1-6c59d2b6c26b.png)
+![image](https://user-images.githubusercontent.com/57039957/213930161-31927390-57aa-4144-a046-2c2bfc2b6901.png)
+![image](https://user-images.githubusercontent.com/57039957/213930168-805bd5f9-acce-4bae-a7e6-09efd210719a.png)
