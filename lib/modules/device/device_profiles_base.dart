@@ -267,6 +267,7 @@ class _DeviceProfileCardState extends TbContextState<DeviceProfileCard> {
   void initState() {
     super.initState();
     _countDevices();
+    _checkOTAUpdateUsingProfile();
   }
 
   @override
@@ -280,7 +281,12 @@ class _DeviceProfileCardState extends TbContextState<DeviceProfileCard> {
     inactiveDevicesCount = EntityQueryApi.countDevices(tbClient, deviceType: widget.deviceProfile.name, active: false);
   }
 
-  _checkOTAUpdate() async {
+  _checkOTAUpdateUsingProfile() async {
+    var authority = tbContext.tbClient.getAuthUser()!.authority;
+    if(authority != Authority.SYS_ADMIN && authority != Authority.TENANT_ADMIN) {
+      return;
+    }
+    log.info("Checking for OTA updates");
     try {
       if (widget.deviceProfile.id.id == null) {
         return;
@@ -325,7 +331,8 @@ class _DeviceProfileCardState extends TbContextState<DeviceProfileCard> {
       if (otaList.length != 0) {
         if ((otaList[0]['version'] != null) && otaList[0]['version'] as int >= version) {
           log.info("OLD ota");
-          showInfoNotification("No OTA package newer that $version available.");
+          showInfoNotification("No OTA package newer than $version for ${deviceprofile?.name}.");
+          await Future.delayed(Duration(seconds: 1));
           return;
         }
         id = otaList[0]['id'] as int;
@@ -337,7 +344,8 @@ class _DeviceProfileCardState extends TbContextState<DeviceProfileCard> {
       }
 
 
-      showInfoNotification("Found new OTA package with version $version");
+      showInfoNotification("Found new OTA package with version $version for ${deviceprofile?.name}.");
+      await Future.delayed(Duration(seconds: 1));
       var otaResponse = await tbClient
           .getOtaPackageService()
           .downloadOtaPackage(otaPackageId);
@@ -354,12 +362,12 @@ class _DeviceProfileCardState extends TbContextState<DeviceProfileCard> {
           .openWrite();
       await otaResponse?.stream.cast<List<int>>().pipe(fileStream);
       await db.update("ota", {"version": version, "path": file.path}, where: "id = ?", whereArgs: [id]);
-      var lis = await db.rawQuery("SELECT * FROM ota");
-      log.info(lis);
       showSuccessNotification(
-          "OTA package with version $version saved to local storage.");
+          "OTA package with version $version saved to local storage for ${deviceprofile?.name}.");
+      await Future.delayed(Duration(seconds: 1));
     } catch (e) {
-      showErrorNotification("Failed to download OTA package.");
+      showErrorNotification("Failed to download OTA package for ${widget.deviceProfile.name}.");
+      await Future.delayed(Duration(seconds: 1));
     }
   }
 
@@ -519,7 +527,7 @@ class _DeviceProfileCardState extends TbContextState<DeviceProfileCard> {
                       },
                     ),
                     onTap: () {
-                      _checkOTAUpdate();
+                      _checkOTAUpdateUsingProfile();
                     }
                 ),
               ]

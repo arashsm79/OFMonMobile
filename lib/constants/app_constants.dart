@@ -6,9 +6,9 @@ abstract class ThingsboardAppConstants {
   static var  deviceEndpoint = 'http://10.0.0.1';
   static var deviceApPassword = '12345678';
   static bool checkedForOTAUpdate = false;
-  static final String semProfile = "SEM Profile";
+  static final String semSSID = "SEM-";
   static final thingsboardOAuth2CallbackUrlScheme = 'org.thingsboard.app.auth';
 
   /// Not for production (only for debugging)
-  static final thingsboardOAuth2AppSecret = 'arashsecret';
+  static final thingsboardOAuth2AppSecret = 'yoursecret';
 }

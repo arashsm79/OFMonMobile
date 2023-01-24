@@ -1,14 +1,22 @@
+import 'dart:convert';
 import 'dart:core';
+import 'dart:io';
+import 'dart:math' as Math;
+import 'package:path/path.dart' as Path;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:intl/intl.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:thingsboard_app/constants/app_constants.dart';
 import 'package:thingsboard_app/constants/assets_path.dart';
 import 'package:thingsboard_app/core/context/tb_context.dart';
 import 'package:thingsboard_app/core/context/tb_context_widget.dart';
 import 'package:thingsboard_app/core/entity/entities_base.dart';
+import 'package:thingsboard_app/core/sem/sem_db.dart';
 import 'package:thingsboard_app/core/sem/sem_page.dart';
 import 'package:thingsboard_app/utils/services/device_profile_cache.dart';
 import 'package:thingsboard_app/utils/services/entity_query_api.dart';
@@ -102,10 +110,128 @@ class _DeviceCardState extends TbContextState<DeviceCard> {
   @override
   void initState() {
     super.initState();
+    _addDeviceNameToDb();
+    _checkOTAUpdateUsingToken();
     if (widget.displayImage || !widget.listWidgetCard) {
       deviceProfileFuture = DeviceProfileCache.getDeviceProfileInfo(
           tbClient, widget.device.field('type')!, widget.device.entityId.id!);
     }
+  }
+  _checkOTAUpdateUsingToken() async {
+    var authority = tbContext.tbClient.getAuthUser()!.authority;
+    if (authority != Authority.CUSTOMER_USER) {
+      return;
+    }
+    var cred = await tbClient
+        .getDeviceService()
+        .getDeviceCredentialsByDeviceId(widget.device.entityId.id!);
+
+    var deviceInfo = await tbClient
+        .getDeviceService()
+        .getDeviceInfo(widget.device.entityId.id!);
+
+    if (deviceInfo == null || cred == null) {
+      return;
+    }
+
+    log.info("Checking for OTA updates");
+    try {
+      if (deviceInfo.deviceProfileId?.id == null) {
+        return;
+      }
+      var deviceProfileId = deviceInfo.deviceProfileId?.id;
+      var accessToken = cred.credentialsId;
+
+
+      Map<String, dynamic> sharedKeysWrapped = json.decode((await http
+              .get(Uri.parse(
+                  "${ThingsboardAppConstants.thingsBoardApiEndpoint}/api/v1/$accessToken/attributes?sharedKeys"))
+              .timeout(Duration(seconds: 30)))
+          .body);
+      Map<String, dynamic> sharedKeys = sharedKeysWrapped['shared'];
+      log.info(sharedKeys);
+
+      var fwTitle = sharedKeys['fw_title'] as String?;
+      var versionStr = sharedKeys['fw_version'] as String?;
+      if(versionStr == null || fwTitle == null){
+          return;
+      }
+
+      var versionComp = versionStr.split(".");
+      var version = int.parse(versionComp[2]) +
+          int.parse(versionComp[1]) * (Math.pow(10, versionComp[2].length)) +
+          int.parse(versionComp[0]) *
+              (Math.pow(10, versionComp[2].length + versionComp[1].length));
+
+      log.info("list $versionComp");
+      log.info("version $version");
+      var db = await SemDb.getDb();
+      var otaList = await db
+          .rawQuery('SELECT * FROM ota WHERE profile_tb_id = ?', [deviceProfileId]);
+      log.info("ota list $otaList");
+
+      int id;
+      if (otaList.length != 0) {
+        if ((otaList[0]['version'] != null) && otaList[0]['version'] as int >= version) {
+          log.info("OLD ota");
+          showInfoNotification("No OTA package newer than $version for ${deviceInfo.name}.");
+          await Future.delayed(Duration(seconds: 2));
+          return;
+        }
+        id = otaList[0]['id'] as int;
+      } else {
+        id = await db.insert("ota", {
+          "tb_id": deviceInfo.id?.id,
+          "profile_tb_id": deviceProfileId
+        });
+      }
+
+
+      showInfoNotification("Found new OTA package with version $version for ${deviceInfo.name}.");
+      await Future.delayed(Duration(seconds: 2));
+      var otaResponse = (await http
+              .get(Uri.parse(
+                  '${ThingsboardAppConstants.thingsBoardApiEndpoint}/api/v1/$accessToken/firmware?title=$fwTitle&version=$versionStr'))
+              .timeout(Duration(seconds: 120)))
+          .bodyBytes;
+      var path = (await getApplicationDocumentsDirectory()).path;
+      var file =
+          File(Path.join(path, 'ota', '$deviceProfileId'));
+      if (await file.exists()) {
+        log.info("file exists");
+        await file.delete();
+      }
+      var fileStream = (await File(
+                  Path.join(path, 'ota', '$deviceProfileId'))
+              .create(recursive: true));
+
+      await fileStream.writeAsBytes(otaResponse);
+      await db.update("ota", {"version": version, "path": file.path}, where: "id = ?", whereArgs: [id]);
+      showSuccessNotification(
+          "OTA package with version $version saved to local storage for ${deviceInfo.name}.");
+      await Future.delayed(Duration(seconds: 2));
+    } catch (e) {
+      log.info(e);
+      showErrorNotification("Failed to download OTA package for ${deviceInfo.name}.");
+      await Future.delayed(Duration(seconds: 2));
+    }
+  }
+
+  _addDeviceNameToDb() async {
+    var cred = await tbClient
+        .getDeviceService()
+        .getDeviceCredentialsByDeviceId(widget.device.entityId.id!);
+
+    var deviceInfo = await tbClient
+        .getDeviceService()
+        .getDeviceInfo(widget.device.entityId.id!);
+
+    if (deviceInfo == null || cred == null) {
+      return;
+    }
+    var accessToken = cred.credentialsId;
+    var db = await SemDb.getDb();
+    await db.update("devices", {'name': deviceInfo.name}, where: 'access_token = ?', whereArgs: [accessToken]);
   }
 
   @override

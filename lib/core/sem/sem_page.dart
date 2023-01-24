@@ -7,6 +7,7 @@ import 'package:flutter_form_builder/flutter_form_builder.dart';
 import 'package:form_builder_validators/form_builder_validators.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/http.dart';
+import 'package:sqflite/sqflite.dart';
 import 'package:thingsboard_app/constants/app_constants.dart';
 import 'package:thingsboard_app/core/context/tb_context.dart';
 import 'package:thingsboard_app/core/context/tb_context_widget.dart';
@@ -14,6 +15,7 @@ import 'package:thingsboard_app/core/entity/entities_base.dart';
 import 'package:thingsboard_app/core/sem/sem_db.dart';
 import 'package:thingsboard_app/core/sem/sem_utils.dart';
 import 'package:thingsboard_app/core/sem/sem_wifi.dart';
+import 'package:wifi_iot/wifi_iot.dart';
 
 class CTReading {
   final int ctId;
@@ -54,6 +56,8 @@ class _SemPageState extends TbContextState<SemPage>
   final _accessTokenFormKey = GlobalKey<FormBuilderState>();
   final _settingsFormKey = GlobalKey<FormBuilderState>();
   final _ctReadingSize = 30;
+  late Database _db;
+  List<ActionItem> _actionItems = [];
   bool _isPending = false;
   final PageLinkController _pageLinkController = PageLinkController();
 
@@ -64,7 +68,11 @@ class _SemPageState extends TbContextState<SemPage>
 
   @override
   void initState() {
+    () async {
+      _db = await SemDb.getDb();
+    }();
     super.initState();
+    _getActionItems(tbContext);
   }
 
   Future<Map<String, dynamic>?> getTimeOnline() async {
@@ -87,14 +95,88 @@ class _SemPageState extends TbContextState<SemPage>
     super.dispose();
   }
 
+  Future<void> _clearLocalDb() async {
+    await _db.rawQuery("DELETE FROM ota");
+    await _db.rawQuery("DELETE FROM telemetry");
+    await _db.rawQuery("DELETE FROM devices");
+    log.info("Cleared DB");
+  }
+
+  Future<List<String>> _getLocalData() async {
+    List<String> list = [];
+    var telemetryList = await _db.rawQuery("SELECT * FROM telemetry");
+    var deviceList = await _db.rawQuery("SELECT * FROM devices");
+    var otaList = await _db.rawQuery("SELECT * FROM ota");
+
+    list.add("###################### Devices ######################");
+    list.add('\n');
+    for (var v in deviceList) {
+      list.add(v.toString());
+      list.add('\n');
+    }
+    list.add("###################### OTA ######################");
+    list.add('\n');
+    for (var v in otaList) {
+      list.add(v.toString());
+      list.add('\n');
+    }
+    list.add("###################### Telemetry ######################");
+    list.add('\n');
+    for (var v in telemetryList) {
+      list.add(v.toString());
+      list.add('\n');
+    }
+
+    return list;
+  }
+
+  Future<int> _connectHook() async {
+    log.info("Running connect hook.");
+    // get device version
+    var version = await _getVersion();
+
+    var token = await _getToken();
+    log.info("token: $token");
+    if (token.isEmpty) {
+      return -1;
+    }
+    var deviceProfileId = token.substring(20, 56);
+    var id = await SemDb.getDeviceIdFromTokenOrAddNewDevice(_db, token);
+    log.info("device profile id $deviceProfileId");
+
+    var otaList = await _db.rawQuery(
+        "SELECT * FROM ota WHERE profile_tb_id = ?", [deviceProfileId]);
+    log.info(otaList);
+
+    if (otaList.length == 0) {
+      showInfoNotification(
+          "No OTA package is available for this device. Device version: $version");
+      await Future.delayed(Duration(seconds: 3));
+      return id;
+    }
+
+    var otaVersion = otaList[0]['version'] as int;
+    if (otaVersion <= version) {
+      showInfoNotification(
+          "No OTA package with newer version is available for this device. Device version: $version");
+      await Future.delayed(Duration(seconds: 3));
+      return id;
+    }
+
+    showInfoNotification(
+        "There is a newer firmware available for this device. OTA Package $otaVersion > Device $version");
+
+    return id;
+  }
+
   Future<int> _getVersion() async {
     try {
-      await forceWifiUsage(true).timeout(Duration(seconds: 10));
+      await forceWifiUsage(true).timeout(Duration(seconds: 30));
       var versionResponse = await http
           .get(
             Uri.parse(ThingsboardAppConstants.deviceEndpoint + '/version'),
           )
-          .timeout(Duration(seconds: 10));
+          .timeout(Duration(seconds: 30));
       log.info("version ${versionResponse.body}");
       return int.parse(versionResponse.body);
     } catch (e) {
@@ -108,12 +190,10 @@ class _SemPageState extends TbContextState<SemPage>
     // get device version
     var version = await _getVersion();
 
-    var db = await SemDb.getDb();
-
     var deviceProfileId = (await _getToken()).substring(20, 56);
     log.info("device profile id $deviceProfileId");
 
-    var otaList = await db.rawQuery(
+    var otaList = await _db.rawQuery(
         "SELECT * FROM ota WHERE profile_tb_id = ?", [deviceProfileId]);
     log.info(otaList);
 
@@ -137,7 +217,7 @@ class _SemPageState extends TbContextState<SemPage>
     log.info("ota length ${fileData.length}");
 
     try {
-      await forceWifiUsage(true).timeout(Duration(seconds: 10));
+      await forceWifiUsage(true).timeout(Duration(seconds: 30));
       var otaResponse = await http
           .post(
             Uri.parse(ThingsboardAppConstants.deviceEndpoint + '/ota'),
@@ -147,38 +227,55 @@ class _SemPageState extends TbContextState<SemPage>
             },
             body: fileData,
           )
-          .timeout(Duration(seconds: 290));
-
-      if (otaResponse.statusCode != 200) {
-        throw Error;
-      }
+          .timeout(Duration(seconds: 120));
     } catch (e) {
-      throw e;
     } finally {
       await forceWifiUsage(false);
     }
   }
 
-  Future<void> _sendToken() async {
-    if (_accessTokenFormKey.currentState?.saveAndValidate() ?? false) {
-      var formValue = _accessTokenFormKey.currentState!.value;
-      String token = formValue['access_token'];
-      try {
-        await forceWifiUsage(true).timeout(Duration(seconds: 10));
-        var res = await http
-            .post(Uri.parse(ThingsboardAppConstants.deviceEndpoint + '/token'),
-                body: utf8.encode(token))
-            .timeout(Duration(seconds: 2));
-        if (res.statusCode == 200) {
-          _accessTokenFormKey.currentState?.reset();
+  Future<void> _sendToken(String token) async {
+    try {
+      log.info("seindg request");
+      await forceWifiUsage(true).timeout(Duration(seconds: 30));
+      var res = await http
+          .post(Uri.parse(ThingsboardAppConstants.deviceEndpoint + '/token'),
+              body: utf8.encode(token))
+          .timeout(Duration(seconds: 2));
+      log.info("got response");
+      if (res.statusCode == 200) {
+        _accessTokenFormKey.currentState?.reset();
+        var accessToken = token.substring(0, 20);
+        var profileTbId = token.substring(20, 56);
+        var ssid = await WiFiForIoTPlugin.getSSID();
+        var list =
+            await _db.rawQuery("SELECT id FROM devices WHERE ssid = ?", [ssid]);
+        if (list.length == 0) {
+          await _db.insert(
+            "devices",
+            {
+              "access_token": accessToken,
+              "profile_tb_id": profileTbId,
+              "ssid": ssid,
+              "last_checked": DateTime.now().millisecondsSinceEpoch
+            },
+          );
+        } else {
+          await _db.update(
+              "devices",
+              {
+                "access_token": accessToken,
+                "profile_tb_id": profileTbId,
+                "last_checked": DateTime.now().millisecondsSinceEpoch
+              },
+              where: 'ssid = ?',
+              whereArgs: [ssid]);
         }
-      } catch (e) {
-        throw e;
-      } finally {
-        await forceWifiUsage(false);
       }
-    } else {
-      throw Error();
+    } catch (e) {
+      throw e;
+    } finally {
+      await forceWifiUsage(false);
     }
   }
 
@@ -193,11 +290,11 @@ class _SemPageState extends TbContextState<SemPage>
     log.info("sending time: $unixTime");
 
     try {
-      await forceWifiUsage(true).timeout(Duration(seconds: 10));
+      await forceWifiUsage(true).timeout(Duration(seconds: 30));
       await http
           .post(Uri.parse(ThingsboardAppConstants.deviceEndpoint + '/time'),
               body: timebuf.buffer.asUint8List())
-          .timeout(Duration(seconds: 2));
+          .timeout(Duration(seconds: 30));
     } catch (e) {
       throw e;
     } finally {
@@ -209,13 +306,13 @@ class _SemPageState extends TbContextState<SemPage>
   Future<List<int>> _getPowerlossLog() async {
     Response response;
     try {
-      await forceWifiUsage(true).timeout(Duration(seconds: 10));
+      await forceWifiUsage(true).timeout(Duration(seconds: 30));
       response = await http
           .get(
             Uri.parse(
                 ThingsboardAppConstants.deviceEndpoint + '/powerloss_log'),
           )
-          .timeout(Duration(seconds: 2));
+          .timeout(Duration(seconds: 30));
     } catch (e) {
       throw e;
     } finally {
@@ -243,12 +340,15 @@ class _SemPageState extends TbContextState<SemPage>
   Future<String> _getToken({bool showOutput: false}) async {
     Response tokenResponse;
     try {
-      await forceWifiUsage(true).timeout(Duration(seconds: 10));
+      await forceWifiUsage(true).timeout(Duration(seconds: 30));
       tokenResponse = await http
           .get(
             Uri.parse(ThingsboardAppConstants.deviceEndpoint + '/token'),
           )
-          .timeout(Duration(seconds: 2));
+          .timeout(Duration(seconds: 30));
+      if (tokenResponse.statusCode != 200) {
+        return "";
+      }
     } catch (e) {
       throw e;
     } finally {
@@ -270,18 +370,148 @@ class _SemPageState extends TbContextState<SemPage>
     return tokenResponse.body;
   }
 
+  Future<void> _initializeDevice(String token) async {
+    await _sendToken(token);
+    await _resetDevice();
+    await _sendTime();
+  }
+
+  Future<void> _sendTokenDialog() async {
+    showDialog<bool>(
+      context: widget.tbContext.currentState!.context,
+      builder: (context) => AlertDialog(
+        title: Text('Send Token'),
+        content: StatefulBuilder(
+          builder: (BuildContext context, StateSetter setState) {
+            return SingleChildScrollView(
+                child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                  FormBuilder(
+                      key: _accessTokenFormKey,
+                      autovalidateMode: AutovalidateMode.disabled,
+                      child: Padding(
+                          padding: const EdgeInsets.only(left: 10, right: 10),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              FormBuilderTextField(
+                                name: 'access_token',
+                                validator: FormBuilderValidators.compose([
+                                  FormBuilderValidators.required(context,
+                                      errorText: 'Token is required'),
+                                ]),
+                                decoration: InputDecoration(
+                                    isDense: true,
+                                    border: OutlineInputBorder(),
+                                    labelText: 'Access Token'),
+                              )
+                            ],
+                          ))),
+                ]));
+          },
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => pop(true, context), child: Text('Cancel')),
+          TextButton(
+              onPressed: () async {
+                if (!(_accessTokenFormKey.currentState?.saveAndValidate() ??
+                    false)) {
+                  return;
+                }
+                var formValue = _accessTokenFormKey.currentState!.value;
+                String token = formValue['access_token'];
+                _actionItemOnClickWrapper(() async {
+                  await _sendToken(token);
+                }, "Send Token");
+                pop(true, context);
+              },
+              child: Text('Send')),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _initializeDeviceDialog() async {
+    showDialog<bool>(
+      context: widget.tbContext.currentState!.context,
+      builder: (context) => AlertDialog(
+        title: Text('Initialize Device'),
+        content: StatefulBuilder(
+          builder: (BuildContext context, StateSetter setState) {
+            return SingleChildScrollView(
+                child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                  FormBuilder(
+                      key: _accessTokenFormKey,
+                      autovalidateMode: AutovalidateMode.disabled,
+                      child: Padding(
+                          padding: const EdgeInsets.only(left: 10, right: 10),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              FormBuilderTextField(
+                                name: 'access_token',
+                                validator: FormBuilderValidators.compose([
+                                  FormBuilderValidators.required(context,
+                                      errorText: 'Token is required'),
+                                ]),
+                                decoration: InputDecoration(
+                                    isDense: true,
+                                    border: OutlineInputBorder(),
+                                    labelText: 'Access Token'),
+                              )
+                            ],
+                          ))),
+                ]));
+          },
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => pop(true, context), child: Text('Cancel')),
+          TextButton(
+              onPressed: () async {
+                if (!(_accessTokenFormKey.currentState?.saveAndValidate() ??
+                    false)) {
+                  return;
+                }
+                var ssid = await WiFiForIoTPlugin.getSSID();
+                var deviceList = await _db.rawQuery(
+                    'SELECT * FROM devices WHERE ssid = ? AND access_token IS NOT NULL',
+                    [ssid]);
+                if (deviceList.length != 0) {
+                  showErrorNotification(
+                      "This devices has already been initialized.");
+                  return;
+                }
+                var formValue = _accessTokenFormKey.currentState!.value;
+                String token = formValue['access_token'];
+                _actionItemOnClickWrapper(() async {
+                  await _initializeDevice(token);
+                }, "Initialize Device");
+                pop(true, context);
+              },
+              child: Text('Initialize')),
+        ],
+      ),
+    );
+  }
+
   Future<void> _collect() async {
-    var db = await SemDb.getDb();
     log.info("Collecting...");
 
     // First get the access token
-    var accessToken = (await _getToken()).substring(0, 20);
-    log.info("Got access token: $accessToken");
+    var token = await _getToken();
+    log.info("Got token: $token");
 
     Response response;
     log.info("Getting telemetry.");
     try {
-      await forceWifiUsage(true).timeout(Duration(seconds: 10));
+      await forceWifiUsage(true).timeout(Duration(seconds: 30));
       // get the telemtry data
       response = await http
           .get(
@@ -293,17 +523,10 @@ class _SemPageState extends TbContextState<SemPage>
     } finally {
       await forceWifiUsage(false);
     }
-    // check whether a device with this access token eixsts
-    var list = await db.rawQuery(
-        'SELECT * FROM devices WHERE access_token = ?', [accessToken]);
-    log.info(list);
 
-    // if this is a new token, add it to device list otherwise return
-    // the id of the existing device.
-    int recordId = (list.length == 0)
-        ? await db.insert('devices', {'access_token': accessToken})
-        : list[0]['id'] as int;
+    var recordId = await SemDb.getDeviceIdFromTokenOrAddNewDevice(_db, token);
     log.info(recordId);
+
     var bodyLength = response.bodyBytes.buffer.lengthInBytes;
     log.info("Got response with length $bodyLength");
     var bdata = response.bodyBytes.buffer.asByteData();
@@ -317,6 +540,7 @@ class _SemPageState extends TbContextState<SemPage>
     var powerlossTimestamps = await _getPowerlossLog();
     log.info("powerloss ts $powerlossTimestamps");
     powerlossTimestamps.sort();
+    powerlossTimestamps = powerlossTimestamps.toSet().toList();
 
     // convert the binary data into a struct and them one by one to the database.
     List<CTReading> responseList = [];
@@ -341,31 +565,34 @@ class _SemPageState extends TbContextState<SemPage>
     if (powerlossTimestamps.isNotEmpty) {
       var addedDelta = 0;
       var errorDelta = currentTime - responseList.last.timestamp;
-      var intervalError = errorDelta ~/ powerlossTimestamps.length;
-      log.info(
-          "curtime: $currentTime, last response time: ${responseList.last.timestamp}");
-      bool done = false;
-      log.info("errorDelta: $errorDelta, intervalError: $intervalError");
-      if (errorDelta > 0) {
-        for (var i = 0; i < responseList.length; i++) {
-          if (!done &&
-              (responseList[i].timestamp >
-                  powerlossTimestamps[powerlossTimestampsIndex])) {
-            addedDelta += intervalError;
-            log.info("added error interval");
-            powerlossTimestampsIndex += 1;
-            if (powerlossTimestampsIndex == powerlossTimestamps.length) {
-              done = true;
+      // check only if errorDelta is bigger than an hour
+      if (errorDelta > 3600000) {
+        var intervalError = errorDelta ~/ powerlossTimestamps.length;
+        log.info(
+            "curtime: $currentTime, last response time: ${responseList.last.timestamp}");
+        bool done = false;
+        log.info("errorDelta: $errorDelta, intervalError: $intervalError");
+        if (errorDelta > 0) {
+          for (var i = 0; i < responseList.length; i++) {
+            if (!done &&
+                (responseList[i].timestamp >
+                    powerlossTimestamps[powerlossTimestampsIndex])) {
+              addedDelta += intervalError;
+              log.info("added error interval");
+              powerlossTimestampsIndex += 1;
+              if (powerlossTimestampsIndex == powerlossTimestamps.length) {
+                done = true;
+              }
             }
+            responseList[i].timestamp += addedDelta;
           }
-          responseList[i].timestamp += addedDelta;
         }
       }
     }
 
     log.info(responseList);
     for (var ctr in responseList) {
-      await db.insert('telemetry', {
+      await _db.insert('telemetry', {
         'ct_id': ctr.ctId,
         'real_power': ctr.realPower,
         'apparent_power': ctr.apparentPower,
@@ -376,20 +603,19 @@ class _SemPageState extends TbContextState<SemPage>
         'timestamp': ctr.timestamp,
         'device_id': recordId
       });
-      log.info("inserted a record");
     }
     await _resetDevice();
   }
 
   Future<void> _resetDevice() async {
-    await forceWifiUsage(true).timeout(Duration(seconds: 10));
+    await forceWifiUsage(true).timeout(Duration(seconds: 30));
     log.info("Resseting Device");
     try {
       var res = await http
           .get(
             Uri.parse(ThingsboardAppConstants.deviceEndpoint + '/reset'),
           )
-          .timeout(Duration(seconds: 10));
+          .timeout(Duration(seconds: 30));
       if (res.statusCode == 200) {
         log.info("Successfully reset device.");
       } else {
@@ -403,23 +629,21 @@ class _SemPageState extends TbContextState<SemPage>
   }
 
   Future<void> _syncWithServer() async {
-    var db = await SemDb.getDb();
     // get a list of all devices
-    var deviceList = await db.rawQuery('SELECT * FROM devices');
+    var deviceList = await _db.rawQuery('SELECT * FROM devices');
 
     log.info(deviceList);
     for (var device in deviceList) {
       String accessToken = device['access_token']! as String;
-      var telemetryList = await db.rawQuery(
+      var telemetryList = await _db.rawQuery(
           'SELECT * FROM telemetry WHERE device_id = ?', [device['id']]);
 
       log.info(accessToken);
-      log.info(telemetryList);
 
       // there are no telemetry data associated with this, device.
       // delete it
       if (telemetryList.length == 0) {
-        await db.rawQuery('DELETE FROM devices WHERE id = ?', [device['id']]);
+        await _db.rawQuery('DELETE FROM devices WHERE id = ?', [device['id']]);
         continue;
       }
 
@@ -439,24 +663,22 @@ class _SemPageState extends TbContextState<SemPage>
         });
       }
 
-      print(jsonEncode(jsonList));
       // Send telemetry data to server
-      await forceWifiUsage(true).timeout(Duration(seconds: 10));
-      var telemetryResponse = await http
-          .post(
-              Uri.parse(ThingsboardAppConstants.thingsBoardApiEndpoint +
-                  '/api/v1/' +
-                  accessToken +
-                  '/telemetry'),
-              body: jsonEncode(jsonList))
-          .timeout(Duration(seconds: 2));
-      await forceWifiUsage(false);
+      log.info("Sending telemetry data to server.");
+      var telemetryResponse = await http.post(
+          Uri.parse(ThingsboardAppConstants.thingsBoardApiEndpoint +
+              '/api/v1/' +
+              accessToken +
+              '/telemetry'),
+          body: jsonEncode(jsonList));
 
       if (telemetryResponse.statusCode == 200) {
-        // log.info("Successfully synced telemetry data.");
-        // await db.rawQuery('DELETE FROM telemetry WHERE device_id = ?', [device['id']]);
+        log.info("Successfully synced telemetry data.");
+      } else {
+        throw Error;
       }
     }
+    await _clearLocalDb();
   }
 
   @override
@@ -558,6 +780,9 @@ class _SemPageState extends TbContextState<SemPage>
                     ),
                     actions: [
                       TextButton(
+                          onPressed: () => pop(true, context),
+                          child: Text('Cancel')),
+                      TextButton(
                           onPressed: () async {
                             if (_settingsFormKey.currentState
                                     ?.saveAndValidate() ??
@@ -594,9 +819,58 @@ class _SemPageState extends TbContextState<SemPage>
                             pop(true, context);
                           },
                           child: Text('Save')),
+                    ],
+                  ),
+                );
+                break;
+              case "local-data":
+                _getLocalData();
+                showDialog<bool>(
+                  context: widget.tbContext.currentState!.context,
+                  builder: (context) => AlertDialog(
+                    title: Text('Local Data'),
+                    content: StatefulBuilder(
+                        builder: (BuildContext context, StateSetter setState) {
+                      return SingleChildScrollView(
+                          child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                            FutureBuilder<List<String>>(
+                                future: _getLocalData(),
+                                builder: (
+                                  BuildContext context,
+                                  AsyncSnapshot<List<String>> snapshot,
+                                ) {
+                                  if (snapshot.connectionState ==
+                                      ConnectionState.waiting) {
+                                    return Text("Loading");
+                                  } else if (snapshot.connectionState ==
+                                      ConnectionState.done) {
+                                    if (snapshot.hasError) {
+                                      return const Text('Error');
+                                    } else if (snapshot.hasData) {
+                                      return SingleChildScrollView(
+                                          scrollDirection: Axis.horizontal,
+                                          child: Text(
+                                              (snapshot.data!).toString()));
+                                    }
+                                  }
+                                  return Text("Coudln't load data.");
+                                })
+                          ]));
+                    }),
+                    actions: [
+                      TextButton(
+                          onPressed: () async {
+                            await _clearLocalDb();
+                            pop(true, context);
+                            showSuccessNotification("Cleared local storage.");
+                          },
+                          child: Text('Clear')),
                       TextButton(
                           onPressed: () => pop(true, context),
-                          child: Text('Cancel'))
+                          child: Text('Ok'))
                     ],
                   ),
                 );
@@ -610,32 +884,15 @@ class _SemPageState extends TbContextState<SemPage>
               value: "settings",
               child: const Text('Settings'),
             ),
+            PopupMenuItem<String>(
+              value: "local-data",
+              child: const Text('Local Data'),
+            ),
           ],
         ),
       ]),
       body: ListView(shrinkWrap: true, children: [
-        FlutterWifiIoT(),
-        FormBuilder(
-            key: _accessTokenFormKey,
-            autovalidateMode: AutovalidateMode.disabled,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Padding(
-                    padding: const EdgeInsets.only(left: 10, right: 10),
-                    child: FormBuilderTextField(
-                      name: 'access_token',
-                      validator: FormBuilderValidators.compose([
-                        FormBuilderValidators.required(context,
-                            errorText: 'Token is required'),
-                      ]),
-                      decoration: InputDecoration(
-                          isDense: true,
-                          border: OutlineInputBorder(),
-                          labelText: 'Access Token'),
-                    )),
-              ],
-            )),
+        FlutterWifiIoT(_connectHook),
         SizedBox(height: 8),
         _buildActionItems(context),
       ]),
@@ -643,7 +900,7 @@ class _SemPageState extends TbContextState<SemPage>
   }
 
   Widget _buildActionItems(BuildContext context) {
-    List<Widget> items = _getActionItems(tbContext).map((actionItem) {
+    List<Widget> items = _actionItems.map((actionItem) {
       return ElevatedButton(
           style: ElevatedButton.styleFrom(
             onPrimary: Theme.of(context).colorScheme.primary,
@@ -694,15 +951,15 @@ class _SemPageState extends TbContextState<SemPage>
     }
   }
 
-  List<ActionItem> _getActionItems(TbContext tbContext) {
-    List<ActionItem> items = [];
-    items.addAll([
+  _getActionItems(TbContext tbContext) {
+    List<ActionItem> basicFunctions = [];
+    List<ActionItem> advancedFunctions = [];
+
+    advancedFunctions.addAll([
       ActionItem(
           title: 'Send Access Token',
           icon: Icons.lock_open,
-          onClick: () {
-            _actionItemOnClickWrapper(_sendToken, 'Send Access Token');
-          }),
+          onClick: _sendTokenDialog),
       ActionItem(
           title: 'Get Access Token',
           icon: Icons.token_outlined,
@@ -718,7 +975,21 @@ class _SemPageState extends TbContextState<SemPage>
             _actionItemOnClickWrapper(_sendTime, 'Update Device Time');
           }),
       ActionItem(
-          title: 'Collect from Device',
+          title: 'Reset Device',
+          icon: Icons.reset_tv,
+          onClick: () {
+            _actionItemOnClickWrapper(_resetDevice, 'Reset Device');
+          }),
+    ]);
+
+    basicFunctions.addAll([
+      ActionItem(
+        title: 'Initialize Device',
+        icon: Icons.start,
+        onClick: _initializeDeviceDialog,
+      ),
+      ActionItem(
+          title: 'Collect Data from Device',
           icon: Icons.download_outlined,
           onClick: () {
             _actionItemOnClickWrapper(_collect, 'Collect from Device');
@@ -736,13 +1007,15 @@ class _SemPageState extends TbContextState<SemPage>
             _actionItemOnClickWrapper(_updateDevice, 'Update Device Firmware');
           }),
       ActionItem(
-          title: 'Reset Device',
-          icon: Icons.reset_tv,
+          title: 'More',
+          icon: Icons.more_horiz_outlined,
           onClick: () {
-            _actionItemOnClickWrapper(_resetDevice, 'Reset Device');
+            _actionItems.removeLast();
+            _actionItems.addAll(advancedFunctions);
+            setState(() {});
           }),
     ]);
-    return items;
+    _actionItems = basicFunctions;
   }
 }
 
